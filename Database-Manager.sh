@@ -32,7 +32,7 @@ main_menu() {
         ;;
       MariaDB)
         clear
-        echo "You chose MariaDB."
+        mariadb_setup_input
         ;;
       Oracle)
         clear
@@ -152,8 +152,6 @@ mongodb_install() {
         dpkg -i mongodb-mongosh_2.2.10_arm64.deb
       fi
     elif [ "$DEBIAN_VERSION" -ge 11 ]; then
-      mkdir -p DBfiles
-      cd DBfiles
       wget https://repo.mongodb.org/apt/debian/dists/bullseye/mongodb-org/7.0/main/binary-amd64/mongodb-org-server_7.0.12_amd64.deb
       dpkg -i mongodb-org-server_7.0.12_amd64.deb
 
@@ -170,6 +168,10 @@ mongodb_install() {
       echo -e "${RED}Debian Version ist älter als 11."
     fi
   fi
+  rm mongodb-mongosh_2.2.10_arm64.deb
+  rm mongodb-mongosh_2.2.10_amd64.deb
+  rm mongodb-org-server_7.0.12_amd64.deb
+
   start_mongodb_service
 }
 
@@ -222,6 +224,110 @@ update_mongod_config() {
   clear
   echo  -e '${GREEN}The Setup was Succesfull MongoDB is Install of on you Server'
 }
+
+mariadb_setup_input() {
+  while true; do
+    INPUT=$(dialog --ascii-lines --title "Mariadb Setup" --form "Create an admin user:" 15 50 0 \
+      "Password:" 1 1 "" 1 20 30 0 \
+      3>&1 1>&2 2>&3)
+
+    password_exitstatus=$?
+
+    phpmyadmin_choice=$(dialog --ascii-lines --title "Mariadb Setup" --checklist "Install phpMyAdmin:" 10 50 1 \
+      1 "phpMyAdmin" off \
+      3>&1 1>&2 2>&3)
+
+    phpmyadmin_exitstatus=$?
+
+    if [ $password_exitstatus -eq 0 ] && [ $phpmyadmin_exitstatus -eq 0 ]; then
+      password=$(echo "$INPUT" | tr -d '\n')
+      phpmyadmin=$(echo "$phpmyadmin_choice" | tr -d '"')
+      
+      if [ -n "$password" ]; then
+        "$password"
+        if [ "$phpmyadmin" = "1" ]; then
+          mariadb_phpmyadmin
+        else
+          mariadb_install 
+        fi
+        break
+      else
+        dialog --ascii-lines --title "Error" --msgbox "Password field must be filled." 6 40
+      fi
+    else
+      clear
+      break
+    fi
+  done
+}
+
+mariadb_install(){
+  clear
+  apt install mariadb-server -y
+  mysql_secure_installation <<EOF
+  $password
+  Y
+  n
+  Y
+  Y
+  Y
+  Y
+EOF
+}
+
+mariadb_phpmyadmin() {
+  clear
+  apt update
+  apt upgrade -y
+  apt-get install nano curl unzip ca-certificates apt-transport-https lsb-release gnupg apache2 -y
+  wget -q https://packages.sury.org/php/apt.gpg -O- | apt-key add - && echo "deb https://packages.sury.org/php/ $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/php.list
+  apt-get update -y
+  apt-get install php8.1 php8.1-cli php8.1-common php8.1-curl php8.1-gd php8.1-intl php8.1-mbstring php8.1-mysql php8.1-opcache php8.1-readline php8.1-xml php8.1-xsl php8.1-zip php8.1-bz2 libapache2-mod-php8.1 -y
+
+  mariadb_install
+
+  cd /usr/share && wget https://www.phpmyadmin.net/downloads/phpMyAdmin-latest-all-languages.zip -O phpmyadmin.zip 
+  unzip phpmyadmin.zip 
+  rm phpmyadmin.zip 
+  mv phpMyAdmin-*-all-languages phpmyadmin 
+  chmod -R 0755 phpmyadmin
+
+  CONF_FILE="/etc/apache2/conf-available/phpmyadmin.conf"
+
+  if [ ! -f "$CONF_FILE" ]; then
+    # Inhalt der Konfigurationsdatei
+    CONF_CONTENT="Alias /phpmyadmin /usr/share/phpmyadmin
+
+<Directory /usr/share/phpmyadmin>
+    Options SymLinksIfOwnerMatch
+    DirectoryIndex index.php
+</Directory>
+
+<Directory /usr/share/phpmyadmin/templates>
+    Require all denied
+</Directory>
+<Directory /usr/share/phpmyadmin/libraries>
+    Require all denied
+</Directory>
+<Directory /usr/share/phpmyadmin/setup/lib>
+    Require all denied
+</Directory>
+"
+
+  # Erstellen der Datei und Einfügen des Inhalts
+  echo "$CONF_CONTENT" | sudo tee "$CONF_FILE" > /dev/null
+  echo "Konfigurationsdatei $CONF_FILE wurde erstellt."
+fi
+
+ a2enconf phpmyadmin 
+ systemctl reload apache2 
+ mkdir /usr/share/phpmyadmin
+ mkdir /usr/share/phpmyadmin/tmp/
+ chown -R www-data:www-data /usr/share/phpmyadmin/tmp/
+
+ systemctl reload apache2
+}
+
 
 # Debug-Ausgaben hinzufügen
 echo "Running main menu..."
