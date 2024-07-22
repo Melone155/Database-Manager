@@ -49,7 +49,6 @@ main_menu() {
 mongodb_menu() {
   CHOICE=$(dialog --ascii-lines --title "DB Manager (MongoDB)" --menu "Please choose your action" 15 50 5 \
     "Install" "You can install your database if there is none on the system yet" \
-    "Update" "Search for and perform an update" \
     "Create User" "Create new user" \
     "Update User" "Edit rights for existing users" \
     "Delete User" "Delete existing users" \
@@ -64,13 +63,9 @@ mongodb_menu() {
         clear
         mongodb_setup_input
         ;;
-      "Update")
-        clear
-        echo "You chose Update."
-        ;;
       "Create User")
         clear
-        echo "You chose Create User."
+        mariadb_create_user
         ;;
       "Update User")
         clear
@@ -89,6 +84,7 @@ mongodb_menu() {
 
 local $name
 local $password
+local passwordrepeat
 local $ip_address
 
 # Funktion für MongoDB-Setup-Eingabe
@@ -96,8 +92,9 @@ mongodb_setup_input() {
   while true; do
     INPUT=$(dialog --ascii-lines --title "MongoDB Setup" --form "Create an admin user:" 15 50 0 \
       "Name:" 1 1 "" 1 20 30 0 \
-      "Password:" 2 1 "" 2 20 30 0 \
-      "IP Address:" 3 1 "" 3 20 30 0 \
+      "Password:" 2 1 "" 2 20 30 0 --insecure \
+      "Password repeat:" 3 1 "" 2 20 30 0 --insecure \
+      "IP Address:" 4 1 "" 3 20 30 0 \
       3>&1 1>&2 2>&3)
 
     exitstatus=$?
@@ -107,9 +104,14 @@ mongodb_setup_input() {
       IFS=$'\n' read -r -d '' name password ip_address <<< "$INPUT"
       $name
       $password
+      $passwordrepeat
       $ip_address
-      if [ -n "$name" ] && [ -n "$password" ] && [ -n "$ip_address" ]; then
-        mongodb_install
+      if [ -n "$name" ] && [ -n "$password" ] && [ -n "$passwordrepeat"] && [ -n "$ip_address" ]; then
+        if [ $password == $passwordrepeat ]; then
+          mongodb_install
+        else
+          dialog --ascii-lines --title "Error" --msgbox "The passwords are not correct Please check your input." 6 40
+        fi
         break
       else
         dialog --ascii-lines --title "Error" --msgbox "All fields must be filled." 6 40
@@ -275,6 +277,44 @@ mariadb_install(){
 EOF
 }
 
+mariadb_create_user(){
+
+# Abrufen der Datenbankliste mit mongosh
+databases=$(echo "show dbs" | mongosh --quiet)
+
+# Überprüfen, ob Datenbanken gefunden wurden
+if [ -z "$databases" ]; then
+  echo "Keine Datenbanken gefunden."
+  exit 1
+fi
+
+# Konvertieren der Datenbankliste in ein dialog-kompatibles Format
+db_array=()
+index=1
+while read -r db size; do
+  db_array+=($index "$db")
+  index=$((index + 1))
+done <<< "$databases"
+
+# Auswahl der Datenbank mit dialog
+db_selection=$(dialog --ascii-lines --title "Wählen Sie eine Datenbank aus" --menu "Verfügbare Datenbanken:" 15 50 10 "${db_array[@]}" 3>&1 1>&2 2>&3)
+
+# Überprüfen des exitstatus von dialog
+exitstatus=$?
+if [ $exitstatus -ne 0 ]; then
+  echo "Auswahl abgebrochen."
+  exit 1
+fi
+
+# Extrahieren des ausgewählten Datenbanknamens
+selected_db=$(echo "$databases" | awk "NR==$db_selection {print \$1}")
+
+# Ausgabe der ausgewählten Datenbank
+echo "Sie haben die Datenbank ausgewählt: $selected_db"
+
+
+}
+
 mariadb_phpmyadmin() {
   clear
   apt update
@@ -332,4 +372,3 @@ fi
 # Debug-Ausgaben hinzufügen
 echo "Running main menu..."
 main_menu
-echo "Finished running main menu."
