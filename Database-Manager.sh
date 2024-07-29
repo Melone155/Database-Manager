@@ -65,7 +65,7 @@ mongodb_menu() {
         ;;
       "Create User")
         clear
-        mariadb_create_user
+        admin_user_loggin_create_user
         ;;
       "Update User")
         clear
@@ -90,27 +90,28 @@ local $ip_address
 # Funktion für MongoDB-Setup-Eingabe
 mongodb_setup_input() {
   while true; do
+    # Dialog für Name und IP-Adresse
     INPUT=$(dialog --ascii-lines --title "MongoDB Setup" --form "Create an admin user:" 15 50 0 \
       "Name:" 1 1 "" 1 20 30 0 \
-      "Password:" 2 1 "" 2 20 30 0 --insecure \
-      "Password repeat:" 3 1 "" 2 20 30 0 --insecure \
-      "IP Address:" 4 1 "" 3 20 30 0 \
+      "IP Address:" 2 1 "" 2 20 30 0 \
       3>&1 1>&2 2>&3)
 
     exitstatus=$?
-    echo "mongodb_setup_input exitstatus: $exitstatus"
-    echo "mongodb_setup_input input: $INPUT"
     if [ $exitstatus -eq 0 ]; then
-      IFS=$'\n' read -r -d '' name password ip_address <<< "$INPUT"
-      $name
-      $password
-      $passwordrepeat
-      $ip_address
-      if [ -n "$name" ] && [ -n "$password" ] && [ -n "$passwordrepeat"] && [ -n "$ip_address" ]; then
-        if [ $password == $passwordrepeat ]; then
+      IFS=$'\n' read -r -d '' name ip_address <<< "$INPUT"
+      
+      # Dialog für Passwort
+      password=$(dialog --ascii-lines --title "MongoDB Setup" --passwordbox "Enter Password:" 10 50 \
+        3>&1 1>&2 2>&3)
+
+      passwordrepeat=$(dialog --ascii-lines --title "MongoDB Setup" --passwordbox "Repeat Password:" 10 50 \
+        3>&1 1>&2 2>&3)
+
+      if [ -n "$name" ] && [ -n "$password" ] && [ -n "$passwordrepeat" ] && [ -n "$ip_address" ]; then
+        if [ "$password" == "$passwordrepeat" ]; then
           mongodb_install
         else
-          dialog --ascii-lines --title "Error" --msgbox "The passwords are not correct Please check your input." 6 40
+          dialog --ascii-lines --title "Error" --msgbox "The passwords do not match. Please check your input." 6 40
         fi
         break
       else
@@ -227,6 +228,160 @@ update_mongod_config() {
   echo  -e '${GREEN}The Setup was Succesfull MongoDB is Install of on you Server'
 }
 
+admin_user_loggin_create_user() {
+  name=$(dialog --ascii-lines --title "Admin Login" --inputbox "Please enter the admin user name:" 10 50 \
+    3>&1 1>&2 2>&3)
+
+  # Eingabe des Passworts (maskiert)
+  password=$(dialog --ascii-lines --title "Admin Login" --passwordbox "Please enter the admin user passwort:" 10 50 \
+    3>&1 1>&2 2>&3)
+
+  exitstatus=$?
+  if [ $exitstatus -eq 0 ]; then
+   #Login succressfull
+   list_databases
+  else
+    echo "Eingabe abgebrochen."
+    clear
+  fi
+}
+
+local $selected_db
+
+list_databases() {
+  MONGO_URI="mongodb://$name:$password@localhost:27017/"
+
+  databases=$(mongosh "$MONGO_URI" --quiet --eval "db.adminCommand('listDatabases').databases.map(db => db.name).join('\n')")
+
+  if [ -z "$databases" ]; then
+    echo "No databases found."
+    exit 1
+  fi
+
+  db_array=()
+  while IFS= read -r db; do
+    db_array+=("$db" "" "off")
+  done <<< "$databases"
+
+  echo "db_array: ${db_array[@]}"
+
+  # Dialog zum Auswählen einer Datenbank
+  exec 3>&1
+  selected_db=$(dialog --ascii-lines --radiolist "Which database should the user be able to access:" 15 50 10 "${db_array[@]}" 2>&1 1>&3)
+  exec 3>&-
+
+  if [ $exitstatus -eq 0 ]; then
+    clear
+    mongodb_create_user_input
+  else
+    clear
+    echo "Selection canceled."
+  fi
+}
+
+mongodb_create_user_input() {
+  while true; do
+    # Dialog für Name
+    INPUT=$(dialog --ascii-lines --title "Create User" --form "Create a new User:" 15 50 0 \
+      "Username:" 1 1 "" 1 20 30 0 \
+      3>&1 1>&2 2>&3)
+
+    exitstatus=$?
+    if [ $exitstatus -eq 0 ]; then
+      IFS=$'\n' read -r username <<< "$INPUT"
+      
+      # Dialog für Passwort
+      passworduser=$(dialog --ascii-lines --title "Create User" --passwordbox "Enter Password:" 10 50 \
+        3>&1 1>&2 2>&3)
+
+      passwordrepeat=$(dialog --ascii-lines --title "Create User" --passwordbox "Repeat Password:" 10 50 \
+        3>&1 1>&2 2>&3)
+
+      if [ -n "$username" ] && [ -n "$passworduser" ] && [ -n "$passwordrepeat" ]; then
+        if [ "$passworduser" == "$passwordrepeat" ]; then
+        choose_permission
+          break
+        else
+          dialog --ascii-lines --title "Error" --msgbox "The passwords do not match. Please check your input." 6 40
+        fi
+      else
+        dialog --ascii-lines --title "Error" --msgbox "All fields must be filled." 6 40
+      fi
+    else
+      clear
+      break
+    fi
+  done
+}
+
+local permission
+
+choose_permission() {
+  OPTION=$(dialog --ascii-lines --title "Choose an Option" --menu "Select an option:" 15 50 2 \
+    1 "dbOwner" \
+    2 "only Read" \
+    3 "read and write" \
+    3>&1 1>&2 2>&3)
+
+  exitstatus=$?
+  if [ $exitstatus -eq 0 ]; then
+    case $OPTION in
+      1)
+        permission="dbOwner"
+        ;;
+      2)
+        permission="read"
+        ;;
+      3)
+        permission="readWrite"
+        ;;
+    esac
+    create_user
+  else
+    echo "Selection cancelled."
+  fi
+}
+
+create_user(){
+
+  mongosh <<EOF
+use admin
+
+db.createUser(
+{
+  user: "$username",
+  pwd: "$passworduser",
+  roles: [ { role: "$permission", db: "$selected_db" } ]
+}
+)
+EOF
+clear
+echo "The user $username was Succesfull Create"
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 mariadb_setup_input() {
   while true; do
     INPUT=$(dialog --ascii-lines --title "Mariadb Setup" --form "Create an admin user:" 15 50 0 \
@@ -275,44 +430,6 @@ mariadb_install(){
   Y
   Y
 EOF
-}
-
-mariadb_create_user(){
-
-# Abrufen der Datenbankliste mit mongosh
-databases=$(echo "show dbs" | mongosh --quiet)
-
-# Überprüfen, ob Datenbanken gefunden wurden
-if [ -z "$databases" ]; then
-  echo "Keine Datenbanken gefunden."
-  exit 1
-fi
-
-# Konvertieren der Datenbankliste in ein dialog-kompatibles Format
-db_array=()
-index=1
-while read -r db size; do
-  db_array+=($index "$db")
-  index=$((index + 1))
-done <<< "$databases"
-
-# Auswahl der Datenbank mit dialog
-db_selection=$(dialog --ascii-lines --title "Wählen Sie eine Datenbank aus" --menu "Verfügbare Datenbanken:" 15 50 10 "${db_array[@]}" 3>&1 1>&2 2>&3)
-
-# Überprüfen des exitstatus von dialog
-exitstatus=$?
-if [ $exitstatus -ne 0 ]; then
-  echo "Auswahl abgebrochen."
-  exit 1
-fi
-
-# Extrahieren des ausgewählten Datenbanknamens
-selected_db=$(echo "$databases" | awk "NR==$db_selection {print \$1}")
-
-# Ausgabe der ausgewählten Datenbank
-echo "Sie haben die Datenbank ausgewählt: $selected_db"
-
-
 }
 
 mariadb_phpmyadmin() {
