@@ -17,8 +17,7 @@ fi
 main_menu() {
   CHOICE=$(dialog --ascii-lines --title "DB Manager" --menu "Please choose your database" 15 50 3 \
     "MongoDB" "" \
-    "MariaDB" "" \
-    "Oracle" "" \
+    "MariaDB Install" "" \
     3>&1 1>&2 2>&3)
 
   exitstatus=$?
@@ -34,10 +33,6 @@ main_menu() {
         clear
         mariadb_setup_input
         ;;
-      Oracle)
-        clear
-        echo "You chose Oracle."
-        ;;
     esac
   else
     clear
@@ -51,7 +46,6 @@ mongodb_menu() {
     "Install" "You can install your database if there is none on the system yet" \
     "Create User" "Create new user" \
     "Update User" "Edit rights for existing users" \
-    "Delete User" "Delete existing users" \
     3>&1 1>&2 2>&3)
 
   exitstatus=$?
@@ -69,11 +63,7 @@ mongodb_menu() {
         ;;
       "Update User")
         clear
-        echo "You chose Update User."
-        ;;
-      "Delete User")
-        clear
-        echo "You chose Delete User."
+        admin_user_loggin_Update_user
         ;;
     esac
   else
@@ -207,7 +197,7 @@ db.createUser(
 {
   user: "$name",
   pwd: "$password",
-  roles: [ { role: "dbAdmin", db: "admin" } ]
+  roles: [ { role: "root", db: "admin" } ]
 }
 )
 EOF
@@ -241,7 +231,7 @@ admin_user_loggin_create_user() {
    #Login succressfull
    list_databases
   else
-    echo "Eingabe abgebrochen."
+    echo "Input canceled."
     clear
   fi
 }
@@ -314,6 +304,7 @@ mongodb_create_user_input() {
   done
 }
 
+
 local permission
 
 choose_permission() {
@@ -345,7 +336,7 @@ choose_permission() {
 create_user(){
 
   mongosh <<EOF
-use admin
+use $selected_db
 
 db.createUser(
 {
@@ -355,11 +346,133 @@ db.createUser(
 }
 )
 EOF
+
+echo "$username" >> /tmp/mongodb_users.txt
+
 clear
 echo "The user $username was Succesfull Create"
 }
 
+local selected_user
 
+admin_user_loggin_Update_user() {
+  name=$(dialog --ascii-lines --title "Admin Login" --inputbox "Please enter the admin user name:" 10 50 \
+    3>&1 1>&2 2>&3)
+
+  # Eingabe des Passworts (maskiert)
+  password=$(dialog --ascii-lines --title "Admin Login" --passwordbox "Please enter the admin user passwort:" 10 50 \
+    3>&1 1>&2 2>&3)
+
+  exitstatus=$?
+  if [ $exitstatus -eq 0 ]; then
+   #Login succressfull
+   choose_existing_user
+  else
+    echo "Input canceled."
+    clear
+  fi
+}
+
+local selected_user
+
+choose_existing_user() {
+  if [ -f /tmp/mongodb_users.txt ]; then
+    mapfile -t users < /tmp/mongodb_users.txt
+  else
+    echo "No users found."
+    users=()
+  fi
+
+  user_array=()
+  for user in "${users[@]}"; do
+    user_array+=("$user" "" "off")
+  done
+
+  exec 3>&1
+  selected_user=$(dialog --ascii-lines --radiolist "Select a user:" 15 50 10 "${user_array[@]}" 2>&1 1>&3)
+  exec 3>&-
+
+  exitstatus=$?
+  if [ $exitstatus -eq 0 ]; then
+    clear
+    list_databases2
+  else
+    clear
+    echo "Selection canceled."
+  fi
+}
+
+list_databases2() {
+  MONGO_URI="mongodb://$name:$password@localhost:27017/"
+
+  databases=$(mongosh "$MONGO_URI" --quiet --eval "db.adminCommand('listDatabases').databases.map(db => db.name).join('\n')")
+
+  if [ -z "$databases" ]; then
+    echo "No databases found."
+    exit 1
+  fi
+
+  db_array=()
+  while IFS= read -r db; do
+    db_array+=("$db" "" "off")
+  done <<< "$databases"
+
+  echo "db_array: ${db_array[@]}"
+
+  # Dialog zum Auswählen einer Datenbank
+  exec 3>&1
+  selected_db=$(dialog --ascii-lines --radiolist "Which database should the user be able to access:" 15 50 10 "${db_array[@]}" 2>&1 1>&3)
+  exec 3>&-
+
+  if [ $exitstatus -eq 0 ]; then
+    clear
+    choose_permission2
+  else
+    clear
+    echo "Selection canceled."
+  fi
+}
+
+choose_permission2() {
+  OPTION=$(dialog --ascii-lines --title "Choose an Option" --menu "Select an option:" 15 50 2 \
+    1 "dbOwner" \
+    2 "only Read" \
+    3 "read and write" \
+    3>&1 1>&2 2>&3)
+
+  exitstatus=$?
+  if [ $exitstatus -eq 0 ]; then
+    case $OPTION in
+      1)
+        §="dbOwner"
+        ;;
+      2)
+        permission="read"
+        ;;
+      3)
+        permission="readWrite"
+        ;;
+    esac
+    create_user
+  else
+    echo "Selection cancelled."
+  fi
+}
+
+update_mongod_user(){
+  mongosh <<EOF
+use $selected_db
+
+db.updateUser("$selected_user", {
+  roles: [ { role: "$choose_permission2", db: "$selected_db" } ]
+})
+EOF
+
+echo "$username" >> /tmp/mongodb_users.txt
+
+clear
+echo "The user $username was Succesfull Update the Permission"
+}
 
 
 
